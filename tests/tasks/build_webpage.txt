@@ -1,0 +1,8 @@
+Build a single-page HTML/CSS/JS website at site/index.html that:
+
+- Shows a live clock that updates every second (HH:MM:SS format)
+- Has a dark/light theme toggle button that persists via localStorage
+- Is fully responsive (works on mobile screens)
+- Has no external dependencies (no CDN links, no frameworks)
+
+Create the file and then verify it works by reading it back and checking the structure.

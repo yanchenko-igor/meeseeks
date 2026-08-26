@@ -1,0 +1,8 @@
+Write a Python script called failing.py that:
+
+1. Reads a JSON file called data.json
+2. Sorts the entries by the "score" field in descending order
+3. Writes the sorted result to sorted.json
+4. Includes proper error handling for missing files and invalid JSON
+
+Then create a data.json with 5 sample entries and run the script to verify it works correctly.

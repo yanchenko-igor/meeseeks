@@ -1,0 +1,3 @@
+Write a Python script that sorts 1 billion integers using only 1MB of RAM.
+The solution must run in O(n log n) time. Implement it and benchmark it against
+Python's built-in sort on a 1M integer array.

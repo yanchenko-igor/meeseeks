@@ -1,0 +1,7 @@
+Refactor src/models/user.py to:
+
+1. Replace the manual validation in __init__ with pydantic
+2. Add type hints to all methods
+3. Keep the public API identical
+
+Run the test suite after each change to make sure nothing breaks.

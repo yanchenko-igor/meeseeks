@@ -1,0 +1,4 @@
+There is a bug in src/utils.py — the parse_csv function has an off-by-one error
+that causes it to skip the last row of every CSV file. Find the bug, fix it,
+and run the existing test suite (pytest tests/) to verify the fix doesn't break
+anything.

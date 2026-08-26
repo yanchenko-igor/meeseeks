@@ -1,0 +1,10 @@
+Write a Python function called fibonacci(n) that returns the nth Fibonacci number.
+It must handle n=0 through n=100 efficiently (no naive recursion).
+
+Requirements:
+- Include type hints on all functions
+- Include a docstring with examples
+- Write tests in test_fibonacci.py covering n=0, n=1, n=5, n=10, n=50, n=100
+- Write a benchmark that compares your implementation against a naive recursive version for n=35
+
+Run the tests to make sure they pass.

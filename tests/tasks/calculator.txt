@@ -1,0 +1,10 @@
+Create a Python calculator module at calc/calculator.py with these functions:
+
+- add(a, b) returns a + b
+- subtract(a, b) returns a - b
+- multiply(a, b) returns a * b
+- divide(a, b) returns a / b (raise ValueError if b is 0)
+
+Also create calc/test_calculator.py using pytest that covers all functions including edge cases (zero, negative numbers, large numbers).
+
+Run the tests and make sure they all pass.
