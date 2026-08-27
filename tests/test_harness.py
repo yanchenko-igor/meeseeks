@@ -385,5 +385,5 @@ class TestSessionLogger:
 
         log_dir = tmp_path / "logs"
         with SessionLogger(log_dir) as slog:
-            assert not slog._file.closed
-        assert slog._file.closed
+            assert not slog.closed
+        assert slog.closed

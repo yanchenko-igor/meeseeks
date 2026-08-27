@@ -125,23 +125,26 @@ def run(config: Config, task_text: str) -> bool:
                 response = result.message
 
                 # Log the LLM call
-                session_log.log_llm_call(
-                    iteration=iteration,
-                    call_type="react",
-                    model=result.model,
-                    messages=[m.to_openai()[0] if m.to_openai() else {} for m in messages],
-                    tools=tools_schema,
-                    response_content=response.content,
-                    response_tool_calls=(
-                        [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                         for tc in response.tool_calls]
-                        if response.tool_calls else None
-                    ),
-                    request_id=result.request_id,
-                    usage=result.usage.to_dict(),
-                    latency_ms=result.latency_ms,
-                    error=result.error,
-                )
+                try:
+                    session_log.log_llm_call(
+                        iteration=iteration,
+                        call_type="react",
+                        model=result.model,
+                        messages=[d for m in messages for d in m.to_openai()],
+                        tools=tools_schema,
+                        response_content=response.content,
+                        response_tool_calls=(
+                            [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                             for tc in response.tool_calls]
+                            if response.tool_calls else None
+                        ),
+                        request_id=result.request_id,
+                        usage=result.usage.to_dict(),
+                        latency_ms=result.latency_ms,
+                        error=result.error,
+                    )
+                except Exception as log_err:
+                    logger.warning("Failed to log LLM call: %s", log_err)
 
                 # Add assistant message to context
                 ctx.add_message(response)
@@ -229,7 +232,10 @@ def run(config: Config, task_text: str) -> bool:
         logger.exception("Orchestrator error")
     finally:
         if session_log is not None:
-            session_log.close()
+            try:
+                session_log.close()
+            except Exception:
+                logger.warning("Failed to close session log", exc_info=True)
         if worktree and config.sandbox.auto_cleanup:
             cleanup_worktree(worktree)
             console.print("[dim]Worktree cleaned up[/dim]")
@@ -268,19 +274,22 @@ Respond with ONLY "YES" or "NO" followed by a brief explanation."""
 
         # Log the judge call
         if session_log:
-            session_log.log_llm_call(
-                iteration=0,
-                call_type="judge",
-                model=result.model,
-                messages=[judge_message.to_openai()[0]],
-                tools=None,
-                response_content=result.message.content,
-                response_tool_calls=None,
-                request_id=result.request_id,
-                usage=result.usage.to_dict(),
-                latency_ms=result.latency_ms,
-                error=result.error,
-            )
+            try:
+                session_log.log_llm_call(
+                    iteration=0,
+                    call_type="judge",
+                    model=result.model,
+                    messages=[judge_message.to_openai()[0]],
+                    tools=None,
+                    response_content=result.message.content,
+                    response_tool_calls=None,
+                    request_id=result.request_id,
+                    usage=result.usage.to_dict(),
+                    latency_ms=result.latency_ms,
+                    error=result.error,
+                )
+            except Exception as log_err:
+                logger.warning("Failed to log judge call: %s", log_err)
 
         if result.message.content:
             console.print(f"\n[dim]Judge: {result.message.content[:300]}[/dim]")

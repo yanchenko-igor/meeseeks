@@ -36,6 +36,16 @@ class SessionLogger:
     def path(self) -> Path:
         return self._path
 
+    @property
+    def closed(self) -> bool:
+        return self._file.closed
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def log_llm_call(
         self,
         *,
@@ -76,13 +86,15 @@ class SessionLogger:
     def close(self) -> None:
         """Flush and close the log file."""
         if self._file and not self._file.closed:
-            self._file.flush()
-            self._file.close()
-            logger.info(
-                "Session log closed: %d entries written to %s",
-                self._entry_count,
-                self._path,
-            )
+            try:
+                self._file.flush()
+            finally:
+                self._file.close()
+                logger.info(
+                    "Session log closed: %d entries written to %s",
+                    self._entry_count,
+                    self._path,
+                )
 
     def __enter__(self) -> SessionLogger:
         return self

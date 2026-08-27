@@ -201,12 +201,17 @@ class LLMClient:
         content_parts: list[str] = []
         tool_calls_data: dict[int, dict[str, Any]] = {}
         last_chunk_model = ""
+        stream_usage = TokenUsage()
 
         for chunk in stream:
             if not chunk.choices:
                 # Usage info comes in the final chunk with no choices
                 if hasattr(chunk, "usage") and chunk.usage:
-                    pass  # could capture usage here
+                    stream_usage = TokenUsage(
+                        prompt_tokens=getattr(chunk.usage, "prompt_tokens", 0) or 0,
+                        completion_tokens=getattr(chunk.usage, "completion_tokens", 0) or 0,
+                        total_tokens=getattr(chunk.usage, "total_tokens", 0) or 0,
+                    )
                 continue
             delta = chunk.choices[0].delta
             if chunk.model:
@@ -248,7 +253,7 @@ class LLMClient:
                     name=data["name"],
                     arguments=json.loads(data["arguments"]) if data["arguments"] else {},
                 )
-                for data in sorted(tool_calls_data.values(), key=lambda x: x["id"])
+                for data in tool_calls_data.values()
             ]
 
         return LLMResult(
@@ -258,5 +263,6 @@ class LLMClient:
                 tool_calls=tool_calls,
             ),
             model=last_chunk_model or self.model,
+            usage=stream_usage,
             latency_ms=latency_ms,
         )
