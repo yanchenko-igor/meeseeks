@@ -18,12 +18,12 @@ Meeseeks is an autonomous AI programming agent that uses a ReAct loop to complet
 
 ```bash
 # From source (recommended)
-git clone https://github.com/your-repo/meeseeks
+git clone git@github.com:yanchenko-igor/meeseeks.git
 cd meeseeks
 pip install -e .
 
 # Or install directly from GitHub
-pip install git+https://github.com/your-repo/meeseeks.git
+pip install git+https://github.com/yanchenko-igor/meeseeks.git
 ```
 
 **Requirements:** Python 3.11+, a git repository, and an LLM provider (see below).
@@ -261,7 +261,7 @@ The agent's system prompt evolves across 5 phases based on iteration progress:
 
 ```yaml
 # Meeseeks configuration
-# See: https://github.com/your-repo/meeseeks
+# See: https://github.com/yanchenko-igor/meeseeks
 
 llm:
   provider: ollama          # ollama | openrouter | nvidia
