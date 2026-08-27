@@ -14,6 +14,7 @@ from meeseeks.config import Config
 from meeseeks.context.manager import ContextManager
 from meeseeks.llm.client import LLMClient
 from meeseeks.llm.types import Message, ToolCall, ToolResult
+from meeseeks.logging import SessionLogger
 from meeseeks.prompts.personality import get_status_line
 from meeseeks.prompts.system import build_system_prompt
 from meeseeks.sandbox.worktree import (
@@ -52,6 +53,7 @@ def run(config: Config, task_text: str) -> bool:
     # Create sandbox
     repo_path = Path(config.repo_path).resolve()
     worktree: Worktree | None = None
+    session_log: SessionLogger | None = None
     success = False
 
     try:
@@ -83,6 +85,7 @@ def run(config: Config, task_text: str) -> bool:
 
         tools_schema = registry.to_openai_tools()
         llm = LLMClient(config.llm)
+        session_log = SessionLogger(repo_path / ".meeseeks" / "logs")
         completed = False
 
         for iteration in range(1, config.harness.max_iterations + 1):
@@ -114,10 +117,31 @@ def run(config: Config, task_text: str) -> bool:
             for step in range(max_steps_per_iteration):
                 # Call LLM
                 try:
-                    response = llm.chat(messages, tools=tools_schema)
+                    result = llm.chat(messages, tools=tools_schema)
                 except Exception as e:
                     console.print(f"[red]LLM error:[/red] {e}")
                     break
+
+                response = result.message
+
+                # Log the LLM call
+                session_log.log_llm_call(
+                    iteration=iteration,
+                    call_type="react",
+                    model=result.model,
+                    messages=[m.to_openai()[0] if m.to_openai() else {} for m in messages],
+                    tools=tools_schema,
+                    response_content=response.content,
+                    response_tool_calls=(
+                        [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                         for tc in response.tool_calls]
+                        if response.tool_calls else None
+                    ),
+                    request_id=result.request_id,
+                    usage=result.usage.to_dict(),
+                    latency_ms=result.latency_ms,
+                    error=result.error,
+                )
 
                 # Add assistant message to context
                 ctx.add_message(response)
@@ -185,7 +209,7 @@ def run(config: Config, task_text: str) -> bool:
             console.print()
 
         # Evaluate completion
-        if completed or _evaluate_completion(worktree, task_text, llm, ctx):
+        if completed or _evaluate_completion(worktree, task_text, llm, ctx, session_log):
             console.print(Rule("[bold green]TASK COMPLETE[/bold green]"))
             # Commit final state
             commit_worktree(worktree, message="meeseeks: task complete")
@@ -204,6 +228,8 @@ def run(config: Config, task_text: str) -> bool:
         console.print(f"[red]Fatal error:[/red] {e}")
         logger.exception("Orchestrator error")
     finally:
+        if session_log is not None:
+            session_log.close()
         if worktree and config.sandbox.auto_cleanup:
             cleanup_worktree(worktree)
             console.print("[dim]Worktree cleaned up[/dim]")
@@ -216,6 +242,7 @@ def _evaluate_completion(
     task_text: str,
     llm: LLMClient,
     ctx: ContextManager,
+    session_log: SessionLogger | None = None,
 ) -> bool:
     """Use LLM to judge if the task is complete."""
     diff = get_worktree_diff(worktree)
@@ -237,10 +264,27 @@ Respond with ONLY "YES" or "NO" followed by a brief explanation."""
 
     judge_message = Message(role="user", content=judge_prompt)
     try:
-        response = llm.chat([judge_message], tools=None)
-        if response.content:
-            console.print(f"\n[dim]Judge: {response.content[:300]}[/dim]")
-            return response.content.strip().upper().startswith("YES")
+        result = llm.chat([judge_message], tools=None)
+
+        # Log the judge call
+        if session_log:
+            session_log.log_llm_call(
+                iteration=0,
+                call_type="judge",
+                model=result.model,
+                messages=[judge_message.to_openai()[0]],
+                tools=None,
+                response_content=result.message.content,
+                response_tool_calls=None,
+                request_id=result.request_id,
+                usage=result.usage.to_dict(),
+                latency_ms=result.latency_ms,
+                error=result.error,
+            )
+
+        if result.message.content:
+            console.print(f"\n[dim]Judge: {result.message.content[:300]}[/dim]")
+            return result.message.content.strip().upper().startswith("YES")
     except Exception as e:
         logger.warning("Judge call failed: %s", e)
 

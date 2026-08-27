@@ -1,4 +1,4 @@
-"""LLM client wrapping the OpenAI SDK for Ollama and OpenRouter."""
+"""LLM client wrapping the OpenAI SDK for Ollama, OpenRouter, and NVIDIA."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from openai import OpenAI, RateLimitError, APIStatusError
 from openai.types.chat import ChatCompletionChunk
 
 from meeseeks.config import LLMConfig
-from meeseeks.llm.types import Message, ToolCall
+from meeseeks.llm.types import LLMResult, Message, TokenUsage, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,8 @@ class LLMClient:
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-    ) -> Message:
-        """Send a chat completion request. Returns an assistant Message."""
+    ) -> LLMResult:
+        """Send a chat completion request. Returns an LLMResult with metadata."""
         openai_messages = []
         for msg in messages:
             openai_messages.extend(msg.to_openai())
@@ -55,26 +55,8 @@ class LLMClient:
             return self._stream_chat(kwargs)
 
         return self._call_with_retry(kwargs)
-        content = choice.message.content or ""
-        tool_calls: list[ToolCall] | None = None
 
-        if choice.message.tool_calls:
-            tool_calls = [
-                ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=json.loads(tc.function.arguments),
-                )
-                for tc in choice.message.tool_calls
-            ]
-
-        return Message(
-            role="assistant",
-            content=content,
-            tool_calls=tool_calls,
-        )
-
-    def _call_with_retry(self, kwargs: dict[str, Any]) -> Message:
+    def _call_with_retry(self, kwargs: dict[str, Any]) -> LLMResult:
         """Call with smart retry on transient errors.
 
         For rate limits:
@@ -83,8 +65,11 @@ class LLMClient:
         """
         last_error: Exception | None = None
         for attempt in range(_MAX_RETRIES):
+            start = time.monotonic()
             try:
                 response = self._client.chat.completions.create(**kwargs)
+                latency_ms = (time.monotonic() - start) * 1000
+
                 choice = response.choices[0]
                 content = choice.message.content or ""
                 tool_calls: list[ToolCall] | None = None
@@ -99,16 +84,35 @@ class LLMClient:
                         for tc in choice.message.tool_calls
                     ]
 
-                return Message(
-                    role="assistant",
-                    content=content,
-                    tool_calls=tool_calls,
+                usage = TokenUsage()
+                if response.usage:
+                    usage = TokenUsage(
+                        prompt_tokens=response.usage.prompt_tokens or 0,
+                        completion_tokens=response.usage.completion_tokens or 0,
+                        total_tokens=response.usage.total_tokens or 0,
+                    )
+
+                return LLMResult(
+                    message=Message(
+                        role="assistant",
+                        content=content,
+                        tool_calls=tool_calls,
+                    ),
+                    request_id=response.id or "",
+                    model=response.model or self.model,
+                    usage=usage,
+                    latency_ms=latency_ms,
                 )
             except (RateLimitError, APIStatusError) as e:
+                latency_ms = (time.monotonic() - start) * 1000
                 last_error = e
                 status = getattr(e, "status_code", 0)
                 if status not in _RETRYABLE_STATUS and not isinstance(e, RateLimitError):
-                    raise
+                    return LLMResult(
+                        message=Message(role="assistant", content=""),
+                        latency_ms=latency_ms,
+                        error=str(e),
+                    )
 
                 # Parse rate limit headers to decide strategy
                 headers = {}
@@ -116,7 +120,6 @@ class LLMClient:
                     headers = dict(e.response.headers) if e.response.headers else {}
 
                 reset_ts = headers.get("x-ratelimit-reset", "")
-                remaining = headers.get("x-ratelimit-remaining", "")
                 limit_source = ""
 
                 # Try to extract limit source from error body
@@ -131,10 +134,15 @@ class LLMClient:
                     # Daily limit or unknown — don't waste time retrying
                     reason = limit_source or "rate_limit"
                     minutes = wait_seconds / 60 if wait_seconds else "unknown"
-                    raise RuntimeError(
+                    error_msg = (
                         f"Rate limited ({reason}). Reset in ~{minutes:.0f} min. "
                         f"Add credits or wait, then retry."
-                    ) from e
+                    )
+                    return LLMResult(
+                        message=Message(role="assistant", content=""),
+                        latency_ms=latency_ms,
+                        error=error_msg,
+                    )
 
                 if wait_seconds > 0:
                     logger.warning(
@@ -150,10 +158,19 @@ class LLMClient:
                         attempt + 1, delay,
                     )
                     time.sleep(delay)
-            except Exception:
-                raise
+            except Exception as e:
+                latency_ms = (time.monotonic() - start) * 1000
+                return LLMResult(
+                    message=Message(role="assistant", content=""),
+                    latency_ms=latency_ms,
+                    error=str(e),
+                )
 
-        raise last_error or RuntimeError("LLM call failed after retries")
+        return LLMResult(
+            message=Message(role="assistant", content=""),
+            latency_ms=0,
+            error=str(last_error) if last_error else "LLM call failed after retries",
+        )
 
     @staticmethod
     def _compute_wait(reset_ts: str, limit_source: str) -> float | None:
@@ -173,20 +190,27 @@ class LLMClient:
         except (ValueError, TypeError):
             return None
 
-    def _stream_chat(self, kwargs: dict[str, Any]) -> Message:
+    def _stream_chat(self, kwargs: dict[str, Any]) -> LLMResult:
         """Stream a chat completion, collecting the full response."""
         kwargs["stream"] = True
+        start = time.monotonic()
         stream: Iterator[ChatCompletionChunk] = (
             self._client.chat.completions.create(**kwargs)
         )
 
         content_parts: list[str] = []
         tool_calls_data: dict[int, dict[str, Any]] = {}
+        last_chunk_model = ""
 
         for chunk in stream:
             if not chunk.choices:
+                # Usage info comes in the final chunk with no choices
+                if hasattr(chunk, "usage") and chunk.usage:
+                    pass  # could capture usage here
                 continue
             delta = chunk.choices[0].delta
+            if chunk.model:
+                last_chunk_model = chunk.model
 
             if delta.content:
                 content_parts.append(delta.content)
@@ -211,6 +235,8 @@ class LLMClient:
                                 tc_delta.function.arguments
                             )
 
+        latency_ms = (time.monotonic() - start) * 1000
+
         if content_parts:
             print()  # newline after stream
 
@@ -225,8 +251,12 @@ class LLMClient:
                 for data in sorted(tool_calls_data.values(), key=lambda x: x["id"])
             ]
 
-        return Message(
-            role="assistant",
-            content="".join(content_parts) or None,
-            tool_calls=tool_calls,
+        return LLMResult(
+            message=Message(
+                role="assistant",
+                content="".join(content_parts) or None,
+                tool_calls=tool_calls,
+            ),
+            model=last_chunk_model or self.model,
+            latency_ms=latency_ms,
         )

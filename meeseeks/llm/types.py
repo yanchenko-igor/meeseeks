@@ -62,3 +62,29 @@ class Message:
 def _json_dumps(obj: Any) -> str:
     import json
     return json.dumps(obj, ensure_ascii=False)
+
+
+@dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
+@dataclass
+class LLMResult:
+    """Rich return type from LLM calls — includes metadata for logging."""
+
+    message: Message
+    request_id: str = ""
+    model: str = ""
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    latency_ms: float = 0.0
+    error: str | None = None

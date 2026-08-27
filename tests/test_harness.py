@@ -254,3 +254,136 @@ class TestPersonality:
         emoji1 = get_emoji(1, 20)
         emoji19 = get_emoji(19, 20)
         assert emoji1 != emoji19  # Should change over time
+
+
+# --- LLM Types Tests ---
+
+
+class TestLLMResult:
+    def test_token_usage_to_dict(self):
+        from meeseeks.llm.types import TokenUsage
+
+        usage = TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        d = usage.to_dict()
+        assert d == {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    def test_llm_result_defaults(self):
+        from meeseeks.llm.types import LLMResult, Message
+
+        msg = Message(role="assistant", content="hello")
+        result = LLMResult(message=msg)
+        assert result.message.content == "hello"
+        assert result.request_id == ""
+        assert result.model == ""
+        assert result.usage.total_tokens == 0
+        assert result.latency_ms == 0.0
+        assert result.error is None
+
+    def test_llm_result_with_error(self):
+        from meeseeks.llm.types import LLMResult, Message
+
+        result = LLMResult(
+            message=Message(role="assistant", content=""),
+            error="Rate limited",
+        )
+        assert result.error == "Rate limited"
+        assert result.message.content == ""
+
+
+# --- Session Logger Tests ---
+
+
+class TestSessionLogger:
+    def test_log_creates_file(self, tmp_path):
+        from meeseeks.logging import SessionLogger
+
+        log_dir = tmp_path / "logs"
+        with SessionLogger(log_dir) as slog:
+            slog.log_llm_call(
+                iteration=1,
+                call_type="react",
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=None,
+                response_content="hello",
+                response_tool_calls=None,
+                request_id="req-123",
+                usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                latency_ms=123.4,
+            )
+
+        # File should exist and contain one valid JSON line
+        files = list(log_dir.glob("session_*.jsonl"))
+        assert len(files) == 1
+        lines = files[0].read_text().strip().split("\n")
+        assert len(lines) == 1
+
+        entry = json.loads(lines[0])
+        assert entry["request_id"] == "req-123"
+        assert entry["iteration"] == 1
+        assert entry["call_type"] == "react"
+        assert entry["model"] == "test-model"
+        assert entry["messages"][0]["role"] == "user"
+        assert entry["response"]["content"] == "hello"
+        assert entry["usage"]["total_tokens"] == 15
+        assert entry["latency_ms"] == 123.4
+        assert entry["error"] is None
+
+    def test_log_multiple_entries(self, tmp_path):
+        from meeseeks.logging import SessionLogger
+
+        log_dir = tmp_path / "logs"
+        with SessionLogger(log_dir) as slog:
+            for i in range(5):
+                slog.log_llm_call(
+                    iteration=i,
+                    call_type="react",
+                    model="m",
+                    messages=[],
+                    tools=None,
+                    response_content=f"msg-{i}",
+                    response_tool_calls=None,
+                    request_id=f"req-{i}",
+                    usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    latency_ms=0,
+                )
+
+        files = list(log_dir.glob("session_*.jsonl"))
+        lines = files[0].read_text().strip().split("\n")
+        assert len(lines) == 5
+        for i, line in enumerate(lines):
+            entry = json.loads(line)
+            assert entry["response"]["content"] == f"msg-{i}"
+
+    def test_log_error_entry(self, tmp_path):
+        from meeseeks.logging import SessionLogger
+
+        log_dir = tmp_path / "logs"
+        with SessionLogger(log_dir) as slog:
+            slog.log_llm_call(
+                iteration=1,
+                call_type="judge",
+                model="m",
+                messages=[],
+                tools=None,
+                response_content=None,
+                response_tool_calls=None,
+                request_id="req-err",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                latency_ms=500.0,
+                error="something broke",
+            )
+
+        files = list(log_dir.glob("session_*.jsonl"))
+        entry = json.loads(files[0].read_text().strip())
+        assert entry["error"] == "something broke"
+        assert entry["call_type"] == "judge"
+        assert entry["response"]["content"] is None
+
+    def test_context_manager_support(self, tmp_path):
+        from meeseeks.logging import SessionLogger
+
+        log_dir = tmp_path / "logs"
+        with SessionLogger(log_dir) as slog:
+            assert not slog._file.closed
+        assert slog._file.closed
